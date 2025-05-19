@@ -43,7 +43,6 @@ export async function POST(request: Request) {
     });
     await newUser.save();
 
-    // Retorna sucesso (sem dados sensíveis)
     return NextResponse.json(
       {message: "Usuário registrado com sucesso!"},
       {status: 201}

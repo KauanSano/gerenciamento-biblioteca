@@ -1,107 +1,122 @@
 // app/dashboard/page.tsx
 "use client";
 
-import React, {useState, useEffect, useCallback} from "react";
-import {DataTable} from "../../components/DataTable"; // Ajuste o caminho
-// *** Importa as NOVAS colunas e a interface ***
-import {getInventoryColumns} from "../../components/inventory-columns"; // << NOVO
-import {IInventoryItem} from "@/lib/models/inventoryItem.model"; // << NOVO (Ajuste o caminho!)
+import React, {useState, useEffect, useCallback, useMemo} from "react";
+import {DataTable} from "../../components/DataTable";
+import {getInventoryColumns} from "../../components/inventory-columns";
+import {IInventoryItem} from "@/lib/models/inventoryItem.model";
 import {toast} from "sonner";
-//import {TopMenu} from "../../components/TopMenu";
+import {PaginationState, SortingState} from "@tanstack/react-table";
 
-// Não precisamos mais do ExcelUpload aqui
-// import { ExcelUpload } from "../../components/ExcelUpload";
-
-// Não precisamos mais de IBook aqui
-// import { IBook } from "../../../lib/models/bookSchema";
+// Hook customizado para debounce
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+  return debouncedValue;
+}
 
 export default function DashboardPage() {
-  // *** Usa a NOVA interface ***
   const [data, setData] = useState<IInventoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  // Estado para editar (agora recebe IInventoryItem)
-  // const [editingItem, setEditingItem] = useState<IInventoryItem | null>(null);
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 10,
+  });
+  const [pageCount, setPageCount] = useState(0);
+  const [totalItems, setTotalItems] = useState(0);
 
-  // *** Atualizar para buscar dados do INVENTÁRIO ***
+  // --- NOVO: Estados para Filtro Global ---
+  const [globalFilterInput, setGlobalFilterInput] = useState(""); // O que o usuário digita
+  const debouncedGlobalFilter = useDebounce(globalFilterInput, 500); // Valor "debounced" para API
+  // --- FIM Filtro Global ---
+
   const fetchData = useCallback(async () => {
     setIsLoading(true);
-    console.log("Buscando dados do inventário..."); // Log para indicar chamada
-    try {
-      // *** CHAMA A NOVA API DE INVENTÁRIO (precisa ser criada na Fase 3) ***
-      // Exemplo: const response = await fetch("/api/inventory");
-      // Por enquanto, vamos simular uma resposta vazia ou mockada:
-      await new Promise(resolve => setTimeout(resolve, 300)); // Simula delay
-      const mockApiResponse = {data: []}; // Simula API retornando array vazio
-      // const mockApiResponse = { data: [{_id: '123', sku: 'ABC', title:'Livro Mock', price: {sale: 10}, stock: {own: 1}}] }; // Exemplo com dados
+    console.log(
+      `Buscando inventário: Página ${pagination.pageIndex + 1}, Limite ${
+        pagination.pageSize
+      }, Filtro: "${debouncedGlobalFilter}"`
+    );
 
-      // if (!response.ok) { // Tratamento de erro da API real
-      //     const errorData = await response.json().catch(() => ({ message: `Erro ${response.status}`}));
-      //     throw new Error(errorData.message || `Erro ${response.status}`);
-      // }
-      // const result = await response.json();
-      const result = mockApiResponse; // Usando mock por enquanto
+    const queryParams = new URLSearchParams({
+      page: (pagination.pageIndex + 1).toString(),
+      limit: pagination.pageSize.toString(),
+    });
+    // Adiciona o filtro global se existir
+    if (debouncedGlobalFilter) {
+      queryParams.append("search", debouncedGlobalFilter);
+    }
+    // Adicionar ordenação aqui se implementado
+
+    try {
+      const response = await fetch(`/api/inventory?${queryParams.toString()}`);
+      if (!response.ok) {
+        /* ... tratamento de erro ... */ throw new Error(
+          `HTTP error! status: ${response.status}`
+        );
+      }
+      const result = await response.json();
       setData(result.data || []);
+      setPageCount(result.pagination?.totalPages || 0);
+      setTotalItems(result.pagination?.totalItems || 0);
     } catch (error: any) {
       console.error("Falha ao buscar inventário:", error);
       toast.error("Erro ao carregar inventário", {description: error.message});
       setData([]);
+      setPageCount(0);
+      setTotalItems(0);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [pagination.pageIndex, pagination.pageSize, debouncedGlobalFilter]); // Adiciona debouncedGlobalFilter como dependência
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
-  // Função para lidar com a edição (recebe IInventoryItem)
   const handleEditRequest = (item: IInventoryItem) => {
-    // << Alterado para IInventoryItem
-    console.log("Solicitação para editar o item:", item);
-    // setEditingItem(item); // Abre modal/página de edição para o item
-    toast.info(`Editar item SKU: ${item.sku}`, {
-      description: "Implementar lógica de edição.",
-    });
+    /* ... */
   };
 
-  // *** Gera as NOVAS colunas ***
-  const columns = getInventoryColumns({
-    refetchData: fetchData, // Passa a função para recarregar após delete/edit
-    onEdit: handleEditRequest, // Passa a função para lidar com clique em editar
-  });
+  const columns = useMemo(
+    () =>
+      getInventoryColumns({
+        refetchData: fetchData,
+        onEdit: handleEditRequest,
+      }),
+    [fetchData]
+  );
 
-  if (isLoading) {
-    return (
-      <div className="container mx-auto py-10 text-center">
-        Carregando inventário...
-      </div>
-    );
+  if (isLoading && data.length === 0) {
+    /* ... loading ... */
   }
 
   return (
-    <div className="flex flex-col h-screen">
-      {/* Renderiza o menu e passa o callback */}
-      <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
-        <h1 className="text-2xl sm:text-3xl font-bold mb-6">
-          Inventário {/* Título da página */}
-        </h1>
+    <>
+      <h1 className="text-2xl sm:text-3xl font-bold mb-2">Inventário</h1>
+      <p className="text-sm text-muted-foreground mb-6">
+        {totalItems > 0
+          ? `${totalItems} itens encontrados.`
+          : "Nenhum item no inventário."}
+      </p>
 
-        {/* O ExcelUpload foi removido daqui, agora está no modal do TopMenu */}
-
-        <DataTable columns={columns} data={data} />
-
-        {/* Lógica para Modal de Edição (se usar modal) */}
-        {/* {editingItem && (
-                     <EditInventoryItemModal
-                         itemData={editingItem}
-                         onClose={() => setEditingItem(null)}
-                         onSaveSuccess={() => {
-                             setEditingItem(null);
-                             fetchData(); // Atualiza tabela
-                         }}
-                     />
-                 )} */}
-      </main>
-    </div>
+      <DataTable
+        columns={columns}
+        data={data}
+        pageCount={pageCount}
+        pagination={pagination}
+        onPaginationChange={setPagination}
+        // --- NOVO: Passando props de filtro global ---
+        globalFilter={globalFilterInput} // Passa o valor do input para a DataTable exibi-lo
+        onGlobalFilterChange={setGlobalFilterInput} // Função para atualizar o estado do input
+      />
+    </>
   );
 }

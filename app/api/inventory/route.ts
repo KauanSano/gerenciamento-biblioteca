@@ -1,82 +1,121 @@
-// app/api/inventory/route.ts (Trecho Modificado)
+// app/api/inventory/route.ts
 import mongoose from "mongoose";
 import {NextResponse} from "next/server";
 import dbConnect from "@/lib/db/dbConnect";
-import {InventoryItem, IInventoryItem} from "@/lib/models/inventoryItem.model";
-import {BookMetadata} from "@/lib/models/bookMetadata.model";
-// Importa o necessário do Next-Auth e suas opções de config
+import {InventoryItem, IInventoryItem} from "@/lib/models/inventoryItem.model"; // Modelo atualizado
 import {getServerSession} from "next-auth/next";
-import {authOptions} from "../auth/[...nextauth]/route"; // Ajuste o caminho para suas authOptions
+import {authOptions} from "@/app/api/auth/[...nextauth]/route";
+import fs from "fs/promises";
+import path from "path";
+import {Writable} from "stream";
 
+// Helper para obter dados da sessão (mantido)
 async function getUserSessionData() {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
-    // Verifica se há sessão e ID do usuário
-    console.log("Nenhuma sessão encontrada ou usuário sem ID");
+    console.log("API /api/inventory: Nenhuma sessão ou ID de usuário.");
     return null;
   }
-  // Acessa os dados que adicionamos no callback da sessão
-  const userId = (session.user as any).id;
-  const tenantId = (session.user as any).activeTenantId; // Pega o tenant ativo do token/sessão
-
-  console.log(`Sessão encontrada: UserID=${userId}, TenantID=${tenantId}`);
-
-  if (!tenantId) {
-    console.log(
-      "Tenant ativo não encontrado na sessão para o usuário:",
-      userId
-    );
-    // Você pode querer lançar um erro aqui ou ter uma lógica para lidar com isso
-  }
-
-  return {userId, tenantId};
+  const userData = session.user as any;
+  return {
+    userId: userData.id,
+    tenantId: userData.activeTenantId || null,
+  };
 }
 
+// Não precisamos mais do config para bodyParser: false com request.formData()
+// export const config = {
+//   api: {
+//     bodyParser: false,
+//   },
+// };
+
+/**
+ * GET /api/inventory
+ * Lista os itens de inventário para o tenant ativo.
+ */
 export async function GET(request: Request) {
   const sessionData = await getUserSessionData();
 
   if (!sessionData?.tenantId) {
-    // Verifica se temos o tenantId
     return NextResponse.json(
       {message: "Não autorizado ou tenant não selecionado."},
       {status: 401}
     );
   }
-  const {tenantId} = sessionData; // Pega o tenantId validado
+  const {tenantId} = sessionData;
 
-  // ... resto da lógica do GET usando tenantId ...
   const {searchParams} = new URL(request.url);
   const page = parseInt(searchParams.get("page") || "1", 10);
-  // ... (lógica de paginação, filtros, sort) ...
-  let query: mongoose.FilterQuery<IInventoryItem> = {tenant: tenantId}; // Filtra pelo tenantId!
-  // ...
+  const limit = parseInt(searchParams.get("limit") || "10", 10);
+  const skip = (page - 1) * limit;
+  const sortOptions: any = {createdAt: -1}; // Default sort
+
+  const globalSearchTerm = searchParams.get("search")?.trim();
+  let query: mongoose.FilterQuery<IInventoryItem> = {tenant: tenantId};
+
+  if (globalSearchTerm) {
+    const searchRegex = {$regex: globalSearchTerm, $options: "i"};
+    // Agora busca diretamente nos campos do InventoryItem
+    query.$or = [
+      {sku: searchRegex},
+      {label: searchRegex},
+      {title: searchRegex},
+      {isbn: searchRegex},
+      {authors: searchRegex}, // Se authors for um array de strings, a busca regex funciona
+      {publisher: searchRegex},
+    ];
+  }
+
   try {
     await dbConnect();
-    const items = await InventoryItem.find(
-      query
-    ) /* ... populate, sort, skip, limit ... */
+
+    const items = await InventoryItem.find(query)
+      .sort(sortOptions)
+      .skip(skip)
+      .limit(limit)
       .lean();
+
     const totalItems = await InventoryItem.countDocuments(query);
-    // ... retornar resposta ...
+
+    if (items.length > 0) {
+      console.log(
+        "Primeiro item retornado pela API GET /api/inventory:",
+        JSON.stringify(items[0], null, 2)
+      );
+    }
+
     return NextResponse.json(
       {
         data: items,
         pagination: {
-          /*...*/
+          currentPage: page,
+          totalPages: Math.ceil(totalItems / limit),
+          totalItems: totalItems,
+          itemsPerPage: limit,
         },
       },
       {status: 200}
     );
-  } catch (error) {
-    /* ... tratamento de erro ... */
+  } catch (error: any) {
+    console.error(
+      `Erro ao listar inventário para tenant ${tenantId} com filtro "${globalSearchTerm}":`,
+      error
+    );
+    return NextResponse.json(
+      {message: "Erro interno do servidor ao buscar inventário."},
+      {status: 500}
+    );
   }
 }
 
+/**
+ * POST /api/inventory
+ * Cria um novo item de inventário, lidando com upload de imagem nativamente.
+ */
 export async function POST(request: Request) {
   const sessionData = await getUserSessionData();
-
   if (!sessionData?.userId || !sessionData?.tenantId) {
-    // Verifica userId e tenantId
     return NextResponse.json(
       {message: "Não autorizado ou tenant não selecionado."},
       {status: 401}
@@ -86,51 +125,144 @@ export async function POST(request: Request) {
 
   try {
     await dbConnect();
-    const body = await request.json();
-    const {sku, condition, price, stock, bookMetadataId, ...otherData} = body;
 
-    if (!sku || !condition || !price?.sale || !bookMetadataId) {
-      /* ... erro 400 ... */
-    }
+    const formData = await request.formData(); // Processa FormData nativamente
 
-    const bookMetaExists = await BookMetadata.findById(bookMetadataId).lean();
-    if (!bookMetaExists) {
-      /* ... erro 404 ... */
+    // Extrai campos de texto
+    const getStringField = (fieldName: string): string | undefined =>
+      formData.get(fieldName)?.toString().trim();
+    const getNumberField = (fieldName: string): number | undefined => {
+      const val = formData.get(fieldName)?.toString().trim();
+      return val ? parseFloat(val) : undefined;
+    };
+    const getIntField = (fieldName: string): number | undefined => {
+      const val = formData.get(fieldName)?.toString().trim();
+      return val ? parseInt(val, 10) : undefined;
+    };
+
+    const sku = getStringField("sku");
+    const title = getStringField("title");
+    const condition = getStringField(
+      "condition"
+    ) as IInventoryItem["condition"];
+    const salePrice = getNumberField("salePrice");
+
+    if (!sku || !title || !condition || salePrice === undefined) {
+      return NextResponse.json(
+        {
+          message:
+            "Campos obrigatórios faltando (SKU, Título, Condição, Preço de Venda).",
+        },
+        {status: 400}
+      );
     }
 
     const newItemData: Partial<IInventoryItem> = {
-      ...otherData,
-      tenant: tenantId, // USA O TENANT ID DA SESSÃO
-      bookMetadata: bookMetadataId,
-      sku: sku.trim(),
+      tenant: tenantId,
+      sku: sku,
+      title: title,
+      authors: formData.getAll("authors[]").map(String).filter(Boolean), // Se 'authors[]' for enviado
+      publisher: getStringField("publisher"),
+      year: getIntField("year"),
+      isbn: getStringField("isbn"),
+      description: getStringField("description"),
       condition: condition,
       price: {
-        /* ... */
+        sale: salePrice,
+        cost: getNumberField("costPrice") ?? 0,
       },
       stock: {
-        /* ... */
+        own: getIntField("stockOwn") ?? 1,
+        consigned: getIntField("stock.consigned") ?? 0,
       },
-      addedBy: userId, // USA O USER ID DA SESSÃO
+      binding:
+        (getStringField("binding") as IInventoryItem["binding"]) || "outro",
+      language:
+        (getStringField("language") as IInventoryItem["language"]) ||
+        "português",
+      itemSpecificDescription: getStringField("itemSpecificDescription"),
+      label: getStringField("label"),
+      subjects: formData.getAll("subjects[]").map(String).filter(Boolean), // Se 'subjects[]' for enviado
+      addedBy: userId,
       status: "available",
     };
 
+    // Processa o campo de desconto se enviado
+    const discountValue = getNumberField("discount.value");
+    const discountType = getStringField("discount.type") as
+      | "percentage"
+      | "fixed"
+      | undefined;
+    if (discountValue !== undefined && discountType && newItemData.price) {
+      newItemData.price.discount = {type: discountType, value: discountValue};
+    }
+
+    // Processa o upload da imagem
+    const imageFile = formData.get("coverImageFile") as File | null;
+    if (imageFile && imageFile.size > 0) {
+      if (imageFile.size > 5 * 1024 * 1024) {
+        // Limite de 5MB
+        return NextResponse.json(
+          {message: "Arquivo de imagem muito grande (limite: 5MB)."},
+          {status: 413}
+        );
+      }
+      if (!["image/jpeg", "image/png", "image/webp"].includes(imageFile.type)) {
+        return NextResponse.json(
+          {
+            message:
+              "Tipo de arquivo de imagem inválido (permitido: JPEG, PNG, WebP).",
+          },
+          {status: 415}
+        );
+      }
+
+      const fileExtension = path.extname(imageFile.name);
+      const uniqueFilename = `cover-${tenantId}-${Date.now()}${fileExtension}`;
+      const uploadDir = path.join(process.cwd(), "public", "uploads", "covers");
+      const filePath = path.join(uploadDir, uniqueFilename);
+
+      // Garante que o diretório de upload exista
+      await fs.mkdir(uploadDir, {recursive: true});
+
+      // Salva o arquivo
+      const buffer = Buffer.from(await imageFile.arrayBuffer());
+      await fs.writeFile(filePath, buffer);
+
+      newItemData.coverImageUrl = `/uploads/covers/${uniqueFilename}`;
+      console.log(`Imagem da capa salva em: ${newItemData.coverImageUrl}`);
+    } else if (getStringField("coverImageUrlDisplay")) {
+      // Se não houve upload, mas uma URL de capa da API do Google foi enviada, usa ela
+      newItemData.coverImageUrl = getStringField("coverImageUrlDisplay");
+    }
+
     const newItem = new InventoryItem(newItemData);
     await newItem.save();
-    // ... (populate e retorno 201) ...
-    const populatedItem = await InventoryItem.findById(newItem._id)
-      .populate([] /*...*/)
-      .lean();
-    return NextResponse.json({data: populatedItem}, {status: 201});
+
+    return NextResponse.json({data: newItem.toObject()}, {status: 201});
   } catch (error: any) {
-    // ... (tratamento de erro, incluindo duplicidade de SKU por tenant) ...
+    console.error(
+      `Erro ao criar item (FormData) para tenant ${tenantId}:`,
+      error
+    );
     if (error.code === 11000 && error.message.includes("tenant_1_sku_1")) {
-      /*...*/
+      // Índice composto
+      return NextResponse.json(
+        {
+          message: `Erro: SKU '${error.keyValue?.sku}' já existe para esta loja.`,
+        },
+        {status: 409}
+      );
     }
     if (error.name === "ValidationError") {
-      /*...*/
+      return NextResponse.json(
+        {message: "Erro de validação:", errors: error.errors},
+        {status: 400}
+      );
     }
+
     return NextResponse.json(
-      {message: "Erro interno do servidor."},
+      {message: error.message || "Erro interno do servidor ao criar item."},
       {status: 500}
     );
   }

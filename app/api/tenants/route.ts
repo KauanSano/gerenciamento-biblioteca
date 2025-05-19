@@ -3,23 +3,20 @@
 import {NextResponse} from "next/server";
 import dbConnect from "@/lib/db/dbConnect";
 import {Tenant} from "@/lib/models/tenant.model";
-import {Membership} from "@/lib/models/membership.model";
+import {Membership, IMembership} from "@/lib/models/membership.model";
 import {getServerSession} from "next-auth/next";
 import {authOptions} from "../auth/[...nextauth]/route";
 
+// Função POST (criar tenant) - já existente, mantida como está
 export async function POST(request: Request) {
   const session = await getServerSession(authOptions);
-
-  // Proteção: Precisa estar logado
   if (!session?.user?.id) {
     return NextResponse.json({message: "Não autorizado."}, {status: 401});
   }
-  const userId = (session.user as any).id; // Pega o ID do usuário logado
+  const userId = (session.user as any).id;
 
   try {
-    const {name} = await request.json(); // Pega o nome da loja do corpo da requisição
-
-    // Validação simples
+    const {name} = await request.json();
     if (!name || typeof name !== "string" || name.trim().length === 0) {
       return NextResponse.json(
         {message: "Nome da loja é obrigatório."},
@@ -27,22 +24,18 @@ export async function POST(request: Request) {
       );
     }
     const trimmedName = name.trim();
-
     await dbConnect();
 
-    // Cria o novo Tenant, associando ao usuário como 'owner'
     const newTenant = new Tenant({
       name: trimmedName,
       owner: userId,
-      // Adicione valores padrão para outros campos se necessário
-      subscriptionStatus: "trialing", // Exemplo
+      subscriptionStatus: "trialing",
     });
     await newTenant.save();
 
-    // Cria a associação (Membership) do usuário com o novo Tenant como 'owner'
     const newMembership = new Membership({
       user: userId,
-      tenant: newTenant._id, // Usa o ID do tenant recém-criado
+      tenant: newTenant._id,
       role: "owner",
       status: "active",
     });
@@ -51,13 +44,9 @@ export async function POST(request: Request) {
     console.log(
       `Tenant "${trimmedName}" (ID: ${newTenant._id}) criado para User ${userId}`
     );
-
-    // Retorna os dados do tenant criado (sem dados sensíveis da membership)
-    // O cliente precisará chamar session.update() para refletir o novo tenant ativo
     return NextResponse.json({data: newTenant.toObject()}, {status: 201});
   } catch (error: any) {
     console.error("Erro ao criar tenant:", error);
-    // Trata erro se já existir um membership para user/tenant (embora não devesse acontecer na criação)
     if (
       error.code === 11000 &&
       error.message.includes("index: user_1_tenant_1")
@@ -80,4 +69,49 @@ export async function POST(request: Request) {
   }
 }
 
-// Poderia adicionar um GET /api/tenants aqui depois para listar os tenants do usuário
+// --- NOVO --- Função GET para listar os tenants do usuário
+export async function GET(request: Request) {
+  const session = await getServerSession(authOptions);
+
+  if (!session?.user?.id) {
+    return NextResponse.json({message: "Não autorizado."}, {status: 401});
+  }
+  const userId = (session.user as any).id;
+
+  try {
+    await dbConnect();
+
+    // Busca todos os memberships ativos para o usuário
+    const memberships = await Membership.find({user: userId, status: "active"})
+      .populate<{tenant: Pick<typeof Tenant, "_id" | "name">}>({
+        // Tipagem para populate
+        path: "tenant", // Popula os dados do tenant referenciado
+        select: "_id name", // Seleciona apenas o ID e o nome do tenant
+      })
+      .sort({createdAt: 1}) // Ordena (opcional, ex: pela data de criação da membership)
+      .lean(); // Retorna objetos JS puros
+
+    // Mapeia os resultados para um formato mais simples para o frontend
+    const userTenants = memberships
+      .map(mem => {
+        if (mem.tenant) {
+          // Verifica se o tenant foi populado corretamente
+          return {
+            id: (mem.tenant as any)._id.toString(), // ID do Tenant
+            name: (mem.tenant as any).name, // Nome do Tenant
+            role: mem.role, // Papel do usuário neste Tenant
+          };
+        }
+        return null; // Caso algo dê errado com o populate
+      })
+      .filter(Boolean); // Remove quaisquer nulos
+
+    return NextResponse.json({data: userTenants}, {status: 200});
+  } catch (error: any) {
+    console.error("Erro ao listar tenants do usuário:", error);
+    return NextResponse.json(
+      {message: "Erro interno do servidor ao buscar suas lojas/sebos."},
+      {status: 500}
+    );
+  }
+}

@@ -1,4 +1,4 @@
-// app/api/lookup/isbn/route.ts // Ou src/app/api/lookup/isbn/route.ts
+// app/api/lookup/isbn/route.ts
 
 import {NextResponse} from "next/server";
 import dbConnect from "@/lib/db/dbConnect"; // << AJUSTE O CAMINHO!

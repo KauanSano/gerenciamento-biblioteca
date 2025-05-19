@@ -1,207 +1,276 @@
+// components/AddInventoryItemForm.tsx
 "use client";
 
-import React, {useState} from "react";
-import {useForm, SubmitHandler} from "react-hook-form"; // Exemplo com react-hook-form
-import {zodResolver} from "@hookform/resolvers/zod"; // Exemplo com Zod
-import * as z from "zod"; // Zod para validação
+import React, {useState, useEffect, useRef} from "react";
+import {useForm, SubmitHandler, Controller} from "react-hook-form";
+import {zodResolver} from "@hookform/resolvers/zod";
+import * as z from "zod";
 import {Button} from "@/components/ui/button";
 import {Input} from "@/components/ui/input";
 import {Label} from "@/components/ui/label";
 import {Textarea} from "@/components/ui/textarea";
-import {Loader2} from "lucide-react";
-
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"; // Exemplo Select
-import {IsbnLookupInput} from "./IsbnLookupInput"; // Importa o componente de busca
-import {IBookMetadata} from "@/lib/models/bookMetadata.model"; // Ajuste o caminho
+} from "@/components/ui/select";
+import {IsbnLookupInput} from "./IsbnLookupInput";
+import {IBookMetadata} from "@/lib/models/bookMetadata.model"; // Usado apenas para o tipo de retorno do lookup
 import {toast} from "sonner";
+import {Loader2, UploadCloud, XCircle} from "lucide-react";
+import {useSession} from "next-auth/react";
+import Image from "next/image"; // Para preview da imagem
 
-// --- Esquema de Validação (Exemplo com Zod) ---
-const inventoryItemSchema = z.object({
-  isbn: z.string().min(1, "ISBN é necessário após busca"), // Validar formato talvez?
-  title: z.string().min(1, "Título é obrigatório"),
-  authors: z.string().optional(), // Autores podem vir como string da API
+// Esquema de Validação com Zod para o formulário
+// Agora inclui todos os campos do livro, pois não há mais BookMetadata separado
+const inventoryItemFormSchema = z.object({
+  // Campos do Livro (serão editáveis)
+  isbn: z.string().optional(),
+  title: z.string().min(1, "Título é obrigatório."),
+  authors: z.string().optional(), // String de autores separados por vírgula
   publisher: z.string().optional(),
-  year: z.number().optional(),
-  // --- Campos específicos do InventoryItem ---
-  sku: z.string().min(1, "SKU é obrigatório"),
+  year: z.coerce.number().int().positive().optional().or(z.literal("")), // Permite string vazia, converte para número
+  description: z.string().optional(), // Descrição geral do livro
+  // coverImageFile: typeof window === 'undefined' ? z.any() : z.instanceof(FileList).optional(), // Para upload de arquivo
+  coverImageUrlDisplay: z.string().optional(), // Para exibir URL da API do Google ou existente
+
+  // Campos do Exemplar
+  sku: z.string().min(1, "SKU é obrigatório."),
   condition: z.enum(["novo", "usado"], {
-    required_error: "Condição é obrigatória",
+    required_error: "Condição é obrigatória.",
   }),
-  salePrice: z.coerce.number().positive("Preço de venda deve ser positivo"),
-  costPrice: z.coerce.number().min(0).optional(), // Custo é opcional
-  stockOwn: z.coerce.number().int().min(0).optional().default(0),
-  binding: z.enum(["brochura", "capa dura", "espiral", "outro"]), // Binding é obrigatório (default 'outro')
-  language: z.enum(["português", "inglês", "espanhol", "outro"]), // Language é obrigatório (default 'outro')
-  description: z.string().optional(),
+  salePrice: z.coerce
+    .number({invalid_type_error: "Preço deve ser um número."})
+    .positive("Preço de venda deve ser positivo."),
+  costPrice: z.coerce
+    .number({invalid_type_error: "Preço deve ser um número."})
+    .min(0)
+    .optional()
+    .or(z.literal("")),
+  stockOwn: z.coerce
+    .number({invalid_type_error: "Estoque deve ser um número."})
+    .int()
+    .min(0)
+    .optional()
+    .default(0),
+  binding: z.enum(["brochura", "capa dura", "espiral", "outro"], {
+    required_error: "Acabamento é obrigatório.",
+  }),
+  language: z.enum(["português", "inglês", "espanhol", "outro"], {
+    required_error: "Idioma é obrigatório.",
+  }),
+  itemSpecificDescription: z.string().optional(),
   label: z.string().optional(),
 });
 
-type InventoryItemFormData = z.infer<typeof inventoryItemSchema>;
+type InventoryItemFormData = z.infer<typeof inventoryItemFormSchema>;
 
-export function AddInventoryItemForm() {
-  const [foundBookData, setFoundBookData] =
-    useState<Partial<IBookMetadata> | null>(null);
-  const [lookupIsbn, setLookupIsbn] = useState<string>(""); // Guarda o ISBN que foi buscado
+interface AddInventoryItemFormProps {
+  onSuccess?: () => void;
+}
+
+export function AddInventoryItemForm({onSuccess}: AddInventoryItemFormProps) {
+  const {data: session} = useSession();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null); // Referência para o input de arquivo
 
   const form = useForm<InventoryItemFormData>({
-    resolver: zodResolver(inventoryItemSchema),
+    resolver: zodResolver(inventoryItemFormSchema),
     defaultValues: {
-      // Valores padrão do formulário
       isbn: "",
       title: "",
+      authors: "",
+      publisher: "",
+      year: undefined,
+      description: "",
       sku: "",
-      condition: undefined, // Começa sem seleção
+      condition: undefined,
       salePrice: undefined,
-      stockOwn: 0,
+      costPrice: undefined,
+      stockOwn: 1,
       binding: "outro",
-      language: "outro",
+      language: "português",
+      itemSpecificDescription: "",
+      label: "",
+      coverImageUrlDisplay: "",
     },
   });
 
-  // Callback quando o ISBN é encontrado com sucesso
+  // Handler quando o IsbnLookupInput encontra dados
   const handleLookupSuccess = (
-    bookMetadata: Partial<IBookMetadata>,
+    bookDataFromApi: Partial<IBookMetadata>,
     source: string
   ) => {
-    toast.success(
-      `Livro encontrado! (Fonte: ${
-        source === "internal" ? "Interna" : "Externa"
-      })`
-    );
-    setFoundBookData(bookMetadata); // Guarda os dados encontrados
-    setLookupIsbn(bookMetadata.isbn || ""); // Guarda o ISBN confirmado
-
-    // ---- Preenche o formulário com os dados encontrados ----
-    form.setValue("isbn", bookMetadata.isbn || ""); // Preenche ISBN no form (pode ser hidden)
-    form.setValue("title", bookMetadata.title || "");
-    form.setValue("authors", bookMetadata.authors?.join(", ") || ""); // Junta autores com vírgula
-    form.setValue("publisher", bookMetadata.publisher || "");
-    form.setValue("year", bookMetadata.year || undefined); // Usa undefined se não houver ano
-    // Você pode decidir se quer preencher outros campos como binding/language aqui
-    // form.setValue('language', bookMetadata.language || 'outro'); // Exemplo
-
-    // Limpa erros anteriores do form, se houver
+    toast.success(`Dados do livro encontrados! (Fonte: ${source})`);
+    form.reset({
+      // Reseta o formulário com os novos dados, mantendo o que já foi digitado para SKU, etc.
+      ...form.getValues(), // Mantém valores já digitados para SKU, condição, preço, etc.
+      isbn: bookDataFromApi.isbn || "",
+      title: bookDataFromApi.title || "",
+      authors: bookDataFromApi.authors?.join(", ") || "",
+      publisher: bookDataFromApi.publisher || "",
+      year: bookDataFromApi.year || undefined,
+      description: bookDataFromApi.description || "",
+      coverImageUrlDisplay: bookDataFromApi.coverImageUrl || "", // Guarda URL da capa da API
+    });
+    if (bookDataFromApi.coverImageUrl) {
+      setImagePreview(bookDataFromApi.coverImageUrl); // Mostra preview da capa da API
+    } else {
+      setImagePreview(null);
+    }
     form.clearErrors();
   };
 
-  // Callback quando o ISBN não é encontrado
   const handleLookupNotFound = (isbn: string) => {
     toast.warning("ISBN não encontrado.", {
-      description: "Você precisará preencher os dados manualmente.",
+      description: "Preencha os dados do livro manualmente.",
     });
-    setFoundBookData(null); // Limpa dados anteriores
-    setLookupIsbn(isbn); // Guarda o ISBN tentado
-    // Limpa campos que seriam preenchidos pela busca, mas mantém o ISBN digitado? Ou limpa tudo?
-    // form.reset({...form.control._defaultValues, isbn: isbn}); // Reseta mantendo ISBN
-    form.setValue("isbn", isbn); // Mantém o ISBN no campo oculto/visível
-    form.setValue("title", ""); // Limpa título, etc.
-    form.setValue("authors", "");
-    form.setValue("publisher", "");
-    form.setValue("year", undefined);
+    // Limpa apenas os campos relacionados ao livro, mantendo o ISBN digitado e os dados do exemplar
+    form.reset({
+      ...form.getValues(),
+      isbn: isbn, // Mantém o ISBN que foi buscado
+      title: "",
+      authors: "",
+      publisher: "",
+      year: undefined,
+      description: "",
+      coverImageUrlDisplay: "",
+    });
+    setImagePreview(null);
   };
 
-  // Callback em caso de erro na API de lookup
   const handleLookupError = (message: string) => {
-    // O toast já foi mostrado pelo componente IsbnLookupInput
-    console.error("Erro no lookup:", message);
-    setFoundBookData(null);
-    setLookupIsbn("");
+    toast.error("Erro na Busca ISBN", {description: message});
+    setImagePreview(null);
   };
 
-  // Função chamada ao submeter o formulário completo
-  const onSubmit: SubmitHandler<InventoryItemFormData> = async data => {
+  // Handler para mudança no input de arquivo
+  const handleImageFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+      // form.setValue('coverImageFile', event.target.files); // O react-hook-form lida com isso
+    } else {
+      setImagePreview(null);
+      // form.setValue('coverImageFile', undefined);
+    }
+  };
+
+  const onSubmit: SubmitHandler<InventoryItemFormData> = async formData => {
     setIsSubmitting(true);
-    console.log("Dados a serem enviados para /api/inventory:", data);
-
-    // Mapear dados do formulário para o formato esperado pela API de criação de InventoryItem
-    const inventoryItemPayload = {
-      // tenantId: // Pegar da sessão/contexto do usuário logado!
-      bookMetadata: foundBookData?._id, // Passar o ID do BookMetadata se encontrado? Ou só o ISBN? Depende da API de inventário
-      centralBookIsbn: lookupIsbn, // Envia o ISBN que foi usado na busca/digitado
-      sku: data.sku,
-      condition: data.condition,
-      price: {
-        sale: data.salePrice,
-        cost: data.costPrice ?? 0, // Default custo 0 se não preenchido
-      },
-      stock: {
-        own: data.stockOwn ?? 0,
-        consigned: 0, // Adicionar campo se necessário
-      },
-      binding: data.binding,
-      language: data.language,
-      description: data.description || foundBookData?.description, // Usa descrição específica ou a padrão?
-      label: data.label,
-      // ... outros campos como isResale, coverImageUrl específico...
-    };
-
-    // Verificação extra: Se bookMetadata não foi encontrado, talvez exigir Título/Autor?
-    if (
-      !inventoryItemPayload.centralBookIsbn &&
-      (!data.title || !data.authors)
-    ) {
-      // Poderia mostrar um erro ou apenas enviar assim mesmo?
-      // Depende da sua regra de negócio e da API de criação de inventário
+    const tenantId = (session?.user as any)?.activeTenantId;
+    if (!tenantId) {
+      toast.error("Erro de Sessão", {description: "Nenhuma loja ativa."});
+      setIsSubmitting(false);
+      return;
     }
 
-    try {
-      // *** AQUI VOCÊ CHAMA SUA API POST /api/inventory ***
-      // const response = await fetch('/api/inventory', {
-      //     method: 'POST',
-      //     headers: { 'Content-Type': 'application/json' },
-      //     body: JSON.stringify(inventoryItemPayload),
-      // });
-      // const result = await response.json();
-      // if (!response.ok) throw new Error(result.message || 'Erro ao salvar item');
+    // Usar FormData para enviar arquivo e outros dados
+    const dataPayload = new FormData();
+    dataPayload.append("tenantId", tenantId);
 
-      toast.success("Item de inventário salvo com sucesso! (Simulado)");
-      form.reset(); // Limpa o formulário
-      setFoundBookData(null);
-      setLookupIsbn("");
-      // Chamar alguma função para atualizar a tabela de inventário? props.onSuccess() ?
+    // Adiciona todos os campos do formulário ao FormData
+    (Object.keys(formData) as Array<keyof InventoryItemFormData>).forEach(
+      key => {
+        const value = formData[key];
+        if (key === "authors" && typeof value === "string") {
+          value
+            .split(",")
+            .map(a => a.trim())
+            .filter(Boolean)
+            .forEach(author => dataPayload.append("authors[]", author));
+        } else if (value !== undefined && value !== null && value !== "") {
+          // @ts-ignore
+          dataPayload.append(
+            key,
+            value instanceof FileList ? value[0] : String(value)
+          );
+        }
+      }
+    );
+
+    // Adiciona o arquivo de imagem, se existir no input ref
+    if (fileInputRef.current?.files?.[0]) {
+      dataPayload.append("coverImageFile", fileInputRef.current.files[0]);
+    }
+
+    console.log("Enviando payload para /api/inventory (FormData):");
+    // Para inspecionar FormData:
+    // for (let [key, value] of dataPayload.entries()) {
+    //     console.log(key, value);
+    // }
+
+    try {
+      const response = await fetch("/api/inventory", {
+        method: "POST",
+        body: dataPayload, // Envia como FormData (NÃO JSON.stringify)
+        // headers: { 'Content-Type': 'multipart/form-data' } // O browser define automaticamente com FormData
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        if (result.errors) {
+          Object.entries(result.errors).forEach(
+            ([field, error]: [string, any]) => {
+              form.setError(field as keyof InventoryItemFormData, {
+                type: "server",
+                message: error.message,
+              });
+            }
+          );
+        }
+        throw new Error(result.message || `Erro ${response.status}`);
+      }
+
+      toast.success("Item de inventário salvo com sucesso!");
+      form.reset();
+      setImagePreview(null);
+      if (fileInputRef.current) fileInputRef.current.value = ""; // Limpa o input de arquivo
+      onSuccess?.();
     } catch (error: any) {
-      console.error("Erro ao salvar item:", error);
-      toast.error("Erro ao salvar", {description: error.message});
+      toast.error("Falha ao Salvar", {description: error.message});
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <form
-      onSubmit={form.handleSubmit(onSubmit)}
-      className="space-y-4 max-w-2xl mx-auto"
-    >
-      {/* Seção de Busca ISBN */}
+    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+      {/* Seção de Busca ISBN (opcional para preenchimento) */}
       <IsbnLookupInput
         onSuccess={handleLookupSuccess}
         onNotFound={handleLookupNotFound}
         onError={handleLookupError}
+        disabled={isSubmitting}
       />
+      <hr className="my-4" />
 
-      {/* Linha divisória ou espaço */}
-      <hr className="my-6" />
-
-      {/* Campos preenchidos pela busca (podem ser read-only ou editáveis) */}
-      {/* Campo ISBN oculto ou visível para referência */}
-      <input type="hidden" {...form.register("isbn")} />
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      {/* Campos de Metadados do Livro (agora editáveis) */}
+      <h3 className="text-lg font-semibold">Dados do Livro</h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <Label htmlFor="isbn">ISBN</Label>
+          <Input
+            id="isbn"
+            {...form.register("isbn")}
+            placeholder="ISBN (opcional)"
+            disabled={isSubmitting}
+          />
+        </div>
         <div>
           <Label htmlFor="title">Título*</Label>
           <Input
             id="title"
             {...form.register("title")}
-            readOnly={!!foundBookData}
-          />{" "}
-          {/* Ex: Readonly se veio da busca */}
+            disabled={isSubmitting}
+          />
           {form.formState.errors.title && (
             <p className="text-sm text-red-600">
               {form.formState.errors.title.message}
@@ -209,11 +278,16 @@ export function AddInventoryItemForm() {
           )}
         </div>
         <div>
-          <Label htmlFor="authors">Autor(es)</Label>
+          <Label htmlFor="authors">
+            Autor(es){" "}
+            <span className="text-xs text-muted-foreground">
+              (separados por vírgula)
+            </span>
+          </Label>
           <Input
             id="authors"
             {...form.register("authors")}
-            readOnly={!!foundBookData}
+            disabled={isSubmitting}
           />
         </div>
         <div>
@@ -221,7 +295,7 @@ export function AddInventoryItemForm() {
           <Input
             id="publisher"
             {...form.register("publisher")}
-            readOnly={!!foundBookData}
+            disabled={isSubmitting}
           />
         </div>
         <div>
@@ -229,17 +303,87 @@ export function AddInventoryItemForm() {
           <Input
             id="year"
             type="number"
-            {...form.register("year", {valueAsNumber: true})}
-            readOnly={!!foundBookData}
+            {...form.register("year")}
+            disabled={isSubmitting}
+          />
+        </div>
+        <div className="md:col-span-2">
+          <Label htmlFor="description">Descrição Geral do Livro</Label>
+          <Textarea
+            id="description"
+            {...form.register("description")}
+            disabled={isSubmitting}
           />
         </div>
       </div>
 
-      {/* Campos específicos do Exemplar (Sempre Editáveis) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
+      {/* Upload de Imagem da Capa */}
+      <div className="pt-2">
+        <Label htmlFor="coverImageFile">Imagem da Capa</Label>
+        <div className="mt-1 flex items-center gap-x-3">
+          {imagePreview ? (
+            <div className="relative group">
+              <Image
+                src={imagePreview}
+                alt="Preview da capa"
+                width={80}
+                height={120}
+                className="h-28 w-auto object-contain rounded border"
+              />
+              <Button
+                type="button"
+                variant="destructive"
+                size="icon"
+                className="absolute -top-2 -right-2 h-6 w-6 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={() => {
+                  setImagePreview(null);
+                  if (fileInputRef.current) fileInputRef.current.value = ""; // Limpa o input de arquivo
+                  form.setValue("coverImageUrlDisplay", ""); // Limpa URL se veio da API
+                }}
+              >
+                <XCircle className="h-4 w-4" />
+                <span className="sr-only">Remover imagem</span>
+              </Button>
+            </div>
+          ) : (
+            <div className="h-28 w-20 flex items-center justify-center rounded border bg-muted text-muted-foreground">
+              <UploadCloud className="h-8 w-8" />
+            </div>
+          )}
+          <Input
+            id="coverImageFile"
+            type="file"
+            accept="image/png, image/jpeg, image/webp"
+            // {...form.register('coverImageFile')} // Não registramos mais com react-hook-form diretamente para FormData
+            ref={fileInputRef} // Usamos ref para pegar o arquivo
+            onChange={handleImageFileChange}
+            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20"
+            disabled={isSubmitting}
+          />
+        </div>
+        {form.watch("coverImageUrlDisplay") && !imagePreview && (
+          <p className="text-xs text-muted-foreground mt-1">
+            Capa encontrada via API:{" "}
+            <a
+              href={form.watch("coverImageUrlDisplay")}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              ver imagem
+            </a>
+            . Selecione um novo arquivo para substituir.
+          </p>
+        )}
+      </div>
+
+      <hr className="my-4" />
+      <h3 className="text-lg font-semibold">Detalhes do Exemplar</h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* SKU, Condição, Preços, Estoque, Acabamento, Idioma, Label */}
         <div>
-          <Label htmlFor="sku">SKU* (Identificador Único da Loja)</Label>
-          <Input id="sku" {...form.register("sku")} />
+          <Label htmlFor="sku">SKU (Seu Cód. Interno)*</Label>
+          <Input id="sku" {...form.register("sku")} disabled={isSubmitting} />
           {form.formState.errors.sku && (
             <p className="text-sm text-red-600">
               {form.formState.errors.sku.message}
@@ -248,20 +392,25 @@ export function AddInventoryItemForm() {
         </div>
         <div>
           <Label htmlFor="condition">Condição*</Label>
-          <Select
-            onValueChange={value =>
-              form.setValue("condition", value as "novo" | "usado")
-            }
-            value={form.watch("condition")}
-          >
-            <SelectTrigger id="condition">
-              <SelectValue placeholder="Selecione a condição" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="novo">Novo</SelectItem>
-              <SelectItem value="usado">Usado</SelectItem>
-            </SelectContent>
-          </Select>
+          <Controller
+            name="condition"
+            control={form.control}
+            render={({field}) => (
+              <Select
+                onValueChange={field.onChange}
+                value={field.value}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="novo">Novo</SelectItem>
+                  <SelectItem value="usado">Usado</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          />
           {form.formState.errors.condition && (
             <p className="text-sm text-red-600">
               {form.formState.errors.condition.message}
@@ -269,12 +418,13 @@ export function AddInventoryItemForm() {
           )}
         </div>
         <div>
-          <Label htmlFor="salePrice">Preço de Venda* (R$)</Label>
+          <Label htmlFor="salePrice">Preço de Venda (R$)*</Label>
           <Input
             id="salePrice"
             type="number"
             step="0.01"
             {...form.register("salePrice")}
+            disabled={isSubmitting}
           />
           {form.formState.errors.salePrice && (
             <p className="text-sm text-red-600">
@@ -289,71 +439,108 @@ export function AddInventoryItemForm() {
             type="number"
             step="0.01"
             {...form.register("costPrice")}
+            disabled={isSubmitting}
           />
         </div>
         <div>
-          <Label htmlFor="stockOwn">Estoque Próprio</Label>
+          <Label htmlFor="stockOwn">Estoque Próprio*</Label>
           <Input
             id="stockOwn"
             type="number"
             step="1"
             {...form.register("stockOwn")}
+            disabled={isSubmitting}
           />
-        </div>
-        {/* Adicionar outros campos: Acabamento, Idioma (Selects?), Label, Descrição (Textarea) */}
-        <div>
-          <Label htmlFor="binding">Acabamento</Label>
-          <Select
-            onValueChange={value =>
-              form.setValue("binding", value as AcabamentoLivro)
-            }
-            value={form.watch("binding")}
-          >
-            <SelectTrigger id="binding">
-              <SelectValue placeholder="Selecione" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="brochura">Brochura</SelectItem>
-              <SelectItem value="capa dura">Capa Dura</SelectItem>
-              <SelectItem value="espiral">Espiral</SelectItem>
-              <SelectItem value="outro">Outro</SelectItem>
-            </SelectContent>
-          </Select>
+          {form.formState.errors.stockOwn && (
+            <p className="text-sm text-red-600">
+              {form.formState.errors.stockOwn.message}
+            </p>
+          )}
         </div>
         <div>
-          <Label htmlFor="language">Idioma</Label>
-          <Select
-            onValueChange={value =>
-              form.setValue("language", value as IdiomaLivro)
-            }
-            value={form.watch("language")}
-          >
-            <SelectTrigger id="language">
-              <SelectValue placeholder="Selecione" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="português">Português</SelectItem>
-              <SelectItem value="inglês">Inglês</SelectItem>
-              <SelectItem value="espanhol">Espanhol</SelectItem>
-              <SelectItem value="outro">Outro</SelectItem>
-            </SelectContent>
-          </Select>
+          <Label htmlFor="binding">Acabamento*</Label>
+          <Controller
+            name="binding"
+            control={form.control}
+            render={({field}) => (
+              <Select
+                onValueChange={field.onChange}
+                value={field.value}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="brochura">Brochura</SelectItem>
+                  <SelectItem value="capa dura">Capa Dura</SelectItem>
+                  <SelectItem value="espiral">Espiral</SelectItem>
+                  <SelectItem value="outro">Outro</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          />
+          {form.formState.errors.binding && (
+            <p className="text-sm text-red-600">
+              {form.formState.errors.binding.message}
+            </p>
+          )}
         </div>
         <div>
-          <Label htmlFor="label">Localização/Etiqueta</Label>
-          <Input id="label" {...form.register("label")} />
+          <Label htmlFor="language">Idioma*</Label>
+          <Controller
+            name="language"
+            control={form.control}
+            render={({field}) => (
+              <Select
+                onValueChange={field.onChange}
+                value={field.value}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="português">Português</SelectItem>
+                  <SelectItem value="inglês">Inglês</SelectItem>
+                  <SelectItem value="espanhol">Espanhol</SelectItem>
+                  <SelectItem value="outro">Outro</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          />
+          {form.formState.errors.language && (
+            <p className="text-sm text-red-600">
+              {form.formState.errors.language.message}
+            </p>
+          )}
         </div>
-        <div className="sm:col-span-2">
-          <Label htmlFor="description">Descrição Específica</Label>
-          <Textarea
-            id="description"
-            {...form.register("description")}
-            placeholder="Detalhes sobre este exemplar específico..."
+        <div>
+          <Label htmlFor="label">Localização/Etiqueta (Interna)</Label>
+          <Input
+            id="label"
+            {...form.register("label")}
+            disabled={isSubmitting}
           />
         </div>
       </div>
+      <div className="pt-2 md:col-span-2">
+        <Label htmlFor="itemSpecificDescription">
+          Descrição Específica do Exemplar
+        </Label>
+        <Textarea
+          id="itemSpecificDescription"
+          {...form.register("itemSpecificDescription")}
+          placeholder="Ex: Leves marcas de uso na capa, miolo em perfeito estado..."
+          disabled={isSubmitting}
+        />
+      </div>
 
-      <Button type="submit" disabled={isSubmitting}>
+      <Button
+        type="submit"
+        disabled={isSubmitting}
+        className="w-full sm:w-auto mt-6"
+      >
         {isSubmitting ? (
           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         ) : null}
