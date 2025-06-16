@@ -23,10 +23,8 @@ import {Loader2, UploadCloud, XCircle} from "lucide-react";
 import {useSession} from "next-auth/react";
 import Image from "next/image"; // Para preview da imagem
 
-// Esquema de Validação com Zod para o formulário
-// Agora inclui todos os campos do livro, pois não há mais BookMetadata separado
 const inventoryItemFormSchema = z.object({
-  // Campos do Livro (serão editáveis)
+  // Campos do Livro (editáveis)
   isbn: z.string().optional(),
   title: z.string().min(1, "Título é obrigatório."),
   authors: z.string().optional(), // String de autores separados por vírgula
@@ -114,10 +112,10 @@ export function AddInventoryItemForm({onSuccess}: AddInventoryItemFormProps) {
       publisher: bookDataFromApi.publisher || "",
       year: bookDataFromApi.year || undefined,
       description: bookDataFromApi.description || "",
-      coverImageUrlDisplay: bookDataFromApi.coverImageUrl || "", // Guarda URL da capa da API
+      coverImageUrlDisplay: bookDataFromApi.coverImageUrl || "",
     });
     if (bookDataFromApi.coverImageUrl) {
-      setImagePreview(bookDataFromApi.coverImageUrl); // Mostra preview da capa da API
+      setImagePreview(bookDataFromApi.coverImageUrl);
     } else {
       setImagePreview(null);
     }
@@ -128,10 +126,9 @@ export function AddInventoryItemForm({onSuccess}: AddInventoryItemFormProps) {
     toast.warning("ISBN não encontrado.", {
       description: "Preencha os dados do livro manualmente.",
     });
-    // Limpa apenas os campos relacionados ao livro, mantendo o ISBN digitado e os dados do exemplar
     form.reset({
       ...form.getValues(),
-      isbn: isbn, // Mantém o ISBN que foi buscado
+      isbn: isbn,
       title: "",
       authors: "",
       publisher: "",
@@ -156,7 +153,7 @@ export function AddInventoryItemForm({onSuccess}: AddInventoryItemFormProps) {
         setImagePreview(reader.result as string);
       };
       reader.readAsDataURL(file);
-      // form.setValue('coverImageFile', event.target.files); // O react-hook-form lida com isso
+      // form.setValue('coverImageFile', event.target.files); // react-hook-form lida com isso
     } else {
       setImagePreview(null);
       // form.setValue('coverImageFile', undefined);
@@ -202,7 +199,7 @@ export function AddInventoryItemForm({onSuccess}: AddInventoryItemFormProps) {
     }
 
     console.log("Enviando payload para /api/inventory (FormData):");
-    // Para inspecionar FormData:
+    // Para debugar FormData:
     // for (let [key, value] of dataPayload.entries()) {
     //     console.log(key, value);
     // }
@@ -252,7 +249,7 @@ export function AddInventoryItemForm({onSuccess}: AddInventoryItemFormProps) {
       />
       <hr className="my-4" />
 
-      {/* Campos de Metadados do Livro (agora editáveis) */}
+      {/* Campos de Metadados do Livro*/}
       <h3 className="text-lg font-semibold">Dados do Livro</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
@@ -354,8 +351,7 @@ export function AddInventoryItemForm({onSuccess}: AddInventoryItemFormProps) {
             id="coverImageFile"
             type="file"
             accept="image/png, image/jpeg, image/webp"
-            // {...form.register('coverImageFile')} // Não registramos mais com react-hook-form diretamente para FormData
-            ref={fileInputRef} // Usamos ref para pegar o arquivo
+            ref={fileInputRef}
             onChange={handleImageFileChange}
             className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20"
             disabled={isSubmitting}

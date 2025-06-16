@@ -3,7 +3,7 @@
 
 import Image from "next/image";
 import {ColumnDef} from "@tanstack/react-table";
-import {MoreHorizontal, Edit, Trash, Copy, ExternalLink} from "lucide-react"; // Adicionado ExternalLink
+import {MoreHorizontal, Edit, Trash, Copy, ExternalLink} from "lucide-react";
 import {toast} from "sonner";
 
 import {Button} from "@/components/ui/button";
@@ -15,15 +15,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {DataTableColumnHeader} from "./DataTableColumnHeader"; // Ajuste o caminho se necessário
+import {DataTableColumnHeader} from "./DataTableColumnHeader";
 
-// Importa tipos e interface do Schema Mongoose
 import {
   IBook,
   CondicaoLivro,
   AcabamentoLivro,
   IdiomaLivro,
-} from "../../lib/models/bookSchema"; // Ajuste o caminho
+} from "../../lib/models/bookSchema";
 
 // --- Funções Auxiliares de Formatação ---
 
@@ -38,7 +37,6 @@ const formatCurrency = (value: number | undefined | null): string => {
       }).format(numberValue);
 };
 
-// Mapeamento para exibição dos Enums (com base nos valores em português do Schema)
 const conditionLabels: Record<CondicaoLivro, string> = {
   novo: "Novo",
   usado: "Usado",
@@ -64,7 +62,7 @@ const languageLabels: Record<IdiomaLivro, string> = {
 // Isso é útil para que as ações (delete, edit) possam atualizar a tabela
 interface BookColumnsProps {
   refetchData?: () => void; // Função para recarregar os dados
-  onEdit?: (book: IBook) => void; // Função para iniciar a edição
+  onEdit?: (book: IBook) => void;
 }
 
 // Gera as colunas, opcionalmente recebendo callbacks
@@ -72,7 +70,7 @@ export const getBookColumns = ({
   refetchData,
   onEdit,
 }: BookColumnsProps = {}): ColumnDef<IBook>[] => [
-  // --- Coluna de Seleção (Opcional) ---
+  // --- Coluna de Seleção ---
   /*
     {
         id: "select",
@@ -419,7 +417,7 @@ export const getBookColumns = ({
     enableHiding: true,
     meta: {title: "É Revenda"},
   },
-  // Poderia adicionar colunas para createdAt, updatedAt se quisesse
+  // Poderia adicionar colunas para createdAt, updatedAt
   {
     accessorKey: "updatedAt",
     header: ({column}) => (

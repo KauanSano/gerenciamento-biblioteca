@@ -7,7 +7,7 @@ import {Membership, IMembership} from "@/lib/models/membership.model";
 import {getServerSession} from "next-auth/next";
 import {authOptions} from "../auth/[...nextauth]/route";
 
-// Função POST (criar tenant) - já existente, mantida como está
+// Função POST (criar tenant) - Atualizada para impedir múltiplos tenants por owner
 export async function POST(request: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -25,6 +25,17 @@ export async function POST(request: Request) {
     }
     const trimmedName = name.trim();
     await dbConnect();
+
+    // --- LÓGICA DE VALIDAÇÃO ADICIONADA ---
+    // Verifica se o usuário já é 'owner' de algum tenant.
+    const existingTenantAsOwner = await Tenant.findOne({owner: userId}).lean();
+    if (existingTenantAsOwner) {
+      return NextResponse.json(
+        {message: "Você já é proprietário de uma loja e não pode criar outra."},
+        {status: 409} // 409 Conflict - Ação não permitida pelo estado atual.
+      );
+    }
+    // --- FIM DA VALIDAÇÃO ---
 
     const newTenant = new Tenant({
       name: trimmedName,
@@ -69,7 +80,7 @@ export async function POST(request: Request) {
   }
 }
 
-// --- NOVO --- Função GET para listar os tenants do usuário
+// Função GET para listar os tenants do usuário (mantida como está)
 export async function GET(request: Request) {
   const session = await getServerSession(authOptions);
 
@@ -81,30 +92,26 @@ export async function GET(request: Request) {
   try {
     await dbConnect();
 
-    // Busca todos os memberships ativos para o usuário
     const memberships = await Membership.find({user: userId, status: "active"})
       .populate<{tenant: Pick<typeof Tenant, "_id" | "name">}>({
-        // Tipagem para populate
-        path: "tenant", // Popula os dados do tenant referenciado
-        select: "_id name", // Seleciona apenas o ID e o nome do tenant
+        path: "tenant",
+        select: "_id name",
       })
-      .sort({createdAt: 1}) // Ordena (opcional, ex: pela data de criação da membership)
-      .lean(); // Retorna objetos JS puros
+      .sort({createdAt: 1})
+      .lean();
 
-    // Mapeia os resultados para um formato mais simples para o frontend
     const userTenants = memberships
       .map(mem => {
         if (mem.tenant) {
-          // Verifica se o tenant foi populado corretamente
           return {
-            id: (mem.tenant as any)._id.toString(), // ID do Tenant
-            name: (mem.tenant as any).name, // Nome do Tenant
-            role: mem.role, // Papel do usuário neste Tenant
+            id: (mem.tenant as any)._id.toString(),
+            name: (mem.tenant as any).name,
+            role: mem.role,
           };
         }
-        return null; // Caso algo dê errado com o populate
+        return null;
       })
-      .filter(Boolean); // Remove quaisquer nulos
+      .filter(Boolean);
 
     return NextResponse.json({data: userTenants}, {status: 200});
   } catch (error: any) {
