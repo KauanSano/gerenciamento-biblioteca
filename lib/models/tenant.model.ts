@@ -1,8 +1,10 @@
+// lib/models/tenant.model.ts
 import mongoose, {Schema, model, models, Document} from "mongoose";
 
 export interface ITenant extends Document {
   name: string;
   owner: mongoose.Schema.Types.ObjectId; // Referência ao User dono
+  cnpj?: string;
   // Campos opcionais
   address?: {
     street?: string;
@@ -15,13 +17,10 @@ export interface ITenant extends Document {
   };
   phone?: string;
   settings?: {
-    // Configurações específicas da loja
-    currency?: string; // Ex: 'BRL'
-    // Adicione outras configs necessárias
+    currency?: string;
   };
-  subscriptionStatus?: "active" | "inactive" | "trialing" | "past_due"; // Para fase de assinatura
-  subscriptionId?: string; // ID da assinatura no gateway de pagamento
-  // Adicione outros campos (logoUrl, website, etc.)
+  subscriptionStatus?: "active" | "inactive" | "trialing" | "past_due";
+  subscriptionId?: string;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -34,14 +33,18 @@ const tenantSchema = new Schema<ITenant>(
       trim: true,
     },
     owner: {
-      // Quem criou/é o dono principal
       type: Schema.Types.ObjectId,
-      ref: "User", // Referencia o modelo User
+      ref: "User",
       required: true,
-      index: true, // Facilita buscar todas as lojas de um usuário
+      index: true,
+    },
+    cnpj: {
+      // NOVO CAMPO
+      type: String,
+      trim: true,
+      // Validação de formato de CNPJ pode ser adicionada aqui com 'match'
     },
     address: {
-      // Subdocumento para endereço
       street: String,
       number: String,
       complement: String,
@@ -57,10 +60,10 @@ const tenantSchema = new Schema<ITenant>(
     subscriptionStatus: {
       type: String,
       enum: ["active", "inactive", "trialing", "past_due"],
-      default: "trialing", // Começa em trial, por exemplo
+      default: "trialing",
       index: true,
     },
-    subscriptionId: {type: String, index: true}, // Ex: ID do Stripe
+    subscriptionId: {type: String, index: true},
   },
   {timestamps: true}
 );

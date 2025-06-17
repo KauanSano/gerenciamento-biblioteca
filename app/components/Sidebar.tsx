@@ -1,4 +1,4 @@
-// components/Sidebar.tsx
+// app/components/Sidebar.tsx
 "use client";
 
 import React, {useState, useEffect} from "react";
@@ -6,13 +6,8 @@ import Link from "next/link";
 import {usePathname} from "next/navigation";
 import {useSession, signOut} from "next-auth/react";
 import {Button} from "@/components/ui/button";
-import {Loader2, CheckCircle, UserPlus} from "lucide-react";
-import {
-  Sheet,
-  SheetContent,
-  SheetTrigger,
-  SheetClose,
-} from "@/components/ui/sheet";
+import {Loader2, CheckCircle, UserPlus, CreditCard} from "lucide-react";
+import {Sheet, SheetContent, SheetTrigger} from "@/components/ui/sheet";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,13 +27,12 @@ import {
   LogOut,
   PlusCircle,
   ChevronDown,
-  ChevronsLeftRight,
   Home,
   LineChart,
 } from "lucide-react";
 import {toast} from "sonner";
 import {CreateTenantForm} from "./CreateTenantForm";
-import {InviteUserForm} from "./InviteUserForm"; // Importa o novo formulário de convite
+import {InviteUserForm} from "./InviteUserForm";
 import {
   Dialog,
   DialogContent,
@@ -59,28 +53,23 @@ export function Sidebar() {
   const [userTenants, setUserTenants] = useState<UserTenant[]>([]);
   const [isLoadingTenants, setIsLoadingTenants] = useState(false);
   const [isCreateTenantModalOpen, setIsCreateTenantModalOpen] = useState(false);
-  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false); // Estado para o modal de convite
+  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [isSheetOpen, setIsSheetOpen] = useState(false);
 
-  // --- DERIVED STATE ---
   const userData = session?.user as any;
   const activeTenantId = userData?.activeTenantId;
-  const activeTenantName =
-    userData?.activeTenantName || "Nenhuma loja selecionada";
+  const activeTenantName = userData?.activeTenantName || "Nenhuma loja";
   const userName = session?.user?.name || session?.user?.email || "Usuário";
   const userEmail = session?.user?.email;
-  // Verifica se o usuário é dono de algum dos tenants listados
   const isOwnerOfAnyTenant = userTenants.some(t => t.role === "owner");
-  // Determina o papel do usuário no tenant ATIVO
   const currentUserRoleInActiveTenant =
     userTenants.find(t => t.id === activeTenantId)?.role || null;
   const canInviteUsers =
     currentUserRoleInActiveTenant === "owner" ||
     currentUserRoleInActiveTenant === "admin";
-  // --- END DERIVED STATE ---
 
   useEffect(() => {
-    if (status === "authenticated" && session?.user?.id) {
+    if (status === "authenticated") {
       fetchUserTenants();
     }
   }, [status, session?.user?.id]);
@@ -89,77 +78,51 @@ export function Sidebar() {
     setIsLoadingTenants(true);
     try {
       const response = await fetch("/api/tenants");
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || "Falha ao buscar lojas/sebos.");
-      }
+      if (!response.ok) throw new Error("Falha ao buscar lojas.");
       const result = await response.json();
       setUserTenants(result.data || []);
     } catch (error: any) {
-      console.error("Erro ao buscar tenants:", error);
       toast.error("Erro ao carregar lojas", {description: error.message});
-      setUserTenants([]);
     } finally {
       setIsLoadingTenants(false);
     }
   };
 
   const handleSelectTenant = async (tenant: UserTenant) => {
-    if (activeTenantId === tenant.id) {
-      toast.info(`Loja "${tenant.name}" já está selecionada.`);
-      setIsSheetOpen(false);
-      return;
-    }
-    toast.loading(`Selecionando loja "${tenant.name}"...`, {
-      id: "select-tenant",
-    });
+    if (activeTenantId === tenant.id) return;
+    toast.loading(`Selecionando "${tenant.name}"...`);
     try {
       await update({
         activeTenantId: tenant.id,
         activeTenantName: tenant.name,
         currentRole: tenant.role,
       });
-      toast.success(`Loja "${tenant.name}" selecionada!`, {
-        id: "select-tenant",
-      });
+      toast.success(`Loja "${tenant.name}" selecionada!`);
       setIsSheetOpen(false);
     } catch (error) {
-      console.error("Erro ao atualizar sessão com novo tenant:", error);
-      toast.error("Erro ao selecionar loja", {
-        id: "select-tenant",
-        description: "Tente novamente.",
-      });
+      toast.error("Erro ao selecionar loja.");
     }
   };
 
   const handleTenantCreated = (newTenant: UserTenant) => {
     setIsCreateTenantModalOpen(false);
     fetchUserTenants();
-    if (newTenant && newTenant.id && newTenant.name) {
-      handleSelectTenant(newTenant);
-    }
+    handleSelectTenant(newTenant);
   };
 
-  const handleInviteSuccess = () => {
-    setIsInviteModalOpen(false);
-    // Poderia futuramente recarregar a lista de usuários da loja
-    // Por enquanto, apenas fecha o modal.
-  };
-
-  if (status === "loading") {
-    return (
-      <aside className="hidden lg:flex w-64 p-4 border-r bg-muted/40 items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin" />
-      </aside>
-    );
-  }
+  const handleInviteSuccess = () => setIsInviteModalOpen(false);
 
   const navItems = [
     {href: "/dashboard", label: "Início", icon: Home},
     {href: "/dashboard/inventory", label: "Inventário", icon: BookCopy},
     {href: "/dashboard/reports", label: "Relatórios", icon: LineChart},
     {href: "/dashboard/users", label: "Usuários da Loja", icon: Users},
-    {href: "/dashboard/settings", label: "Configurações", icon: Settings},
+    {
+      href: "/dashboard/settings/account",
+      label: "Configurações",
+      icon: Settings,
+    },
+    {href: "/dashboard/billing", label: "Assinatura", icon: CreditCard}, // NOVO LINK
   ];
 
   const sidebarContent = (
@@ -215,24 +178,22 @@ export function Sidebar() {
                     </DropdownMenuItem>
                   ))
                 ) : (
-                  <DropdownMenuItem disabled>Nenhuma loja.</DropdownMenuItem>
+                  <DropdownMenuItem disabled>
+                    Nenhuma loja encontrada.
+                  </DropdownMenuItem>
                 )}
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
-              {/* --- LÓGICA CONDICIONAL ADICIONADA --- */}
               {canInviteUsers && (
                 <DropdownMenuItem onClick={() => setIsInviteModalOpen(true)}>
-                  <UserPlus className="mr-2 h-4 w-4" />
-                  Convidar Usuário
+                  <UserPlus className="mr-2 h-4 w-4" /> Convidar Usuário
                 </DropdownMenuItem>
               )}
-              {/* Só mostra "Criar Nova Loja" se o usuário NÃO for dono de nenhuma */}
               {!isOwnerOfAnyTenant && (
                 <DropdownMenuItem
                   onClick={() => setIsCreateTenantModalOpen(true)}
                 >
-                  <PlusCircle className="mr-2 h-4 w-4" />
-                  Criar Nova Loja
+                  <PlusCircle className="mr-2 h-4 w-4" /> Criar Nova Loja
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>
@@ -289,24 +250,18 @@ export function Sidebar() {
 
   return (
     <>
-      {/* Modal para Criar Novo Tenant */}
       <Dialog
         open={isCreateTenantModalOpen}
         onOpenChange={setIsCreateTenantModalOpen}
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Criar Sua Loja/Sebo</DialogTitle>
-            <DialogDescription>
-              Dê um nome para o seu espaço. Lembre-se, você só pode ser
-              proprietário de uma loja.
-            </DialogDescription>
+            <DialogTitle>Criar Sua Loja</DialogTitle>
+            <DialogDescription>Dê um nome para o seu espaço.</DialogDescription>
           </DialogHeader>
           <CreateTenantForm onTenantCreated={handleTenantCreated} />
         </DialogContent>
       </Dialog>
-
-      {/* NOVO: Modal para Convidar Usuário */}
       <Dialog open={isInviteModalOpen} onOpenChange={setIsInviteModalOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -322,13 +277,9 @@ export function Sidebar() {
           />
         </DialogContent>
       </Dialog>
-
-      {/* Sidebar para Desktop */}
       <aside className="hidden lg:block border-r bg-muted/40">
         {sidebarContent}
       </aside>
-
-      {/* Botão e Sheet para Mobile */}
       <div className="lg:hidden p-2 fixed top-2 left-2 z-50 bg-background/80 backdrop-blur-sm rounded-full border">
         <Sheet open={isSheetOpen} onOpenChange={setIsSheetOpen}>
           <SheetTrigger asChild>
