@@ -6,7 +6,13 @@ import Link from "next/link";
 import {usePathname} from "next/navigation";
 import {useSession, signOut} from "next-auth/react";
 import {Button} from "@/components/ui/button";
-import {Loader2, CheckCircle, UserPlus, CreditCard} from "lucide-react";
+import {
+  Loader2,
+  CheckCircle,
+  UserPlus,
+  CreditCard,
+  History,
+} from "lucide-react";
 import {Sheet, SheetContent, SheetTrigger} from "@/components/ui/sheet";
 import {
   DropdownMenu,
@@ -115,14 +121,14 @@ export function Sidebar() {
   const navItems = [
     {href: "/dashboard", label: "Início", icon: Home},
     {href: "/dashboard/inventory", label: "Inventário", icon: BookCopy},
-    {href: "/dashboard/reports", label: "Relatórios", icon: LineChart},
-    {href: "/dashboard/users", label: "Usuários da Loja", icon: Users},
+    {href: "/dashboard/users", label: "Usuários", icon: Users},
+    {href: "/dashboard/audit", label: "Auditoria", icon: History}, // NOVO
     {
       href: "/dashboard/settings/account",
       label: "Configurações",
       icon: Settings,
     },
-    {href: "/dashboard/billing", label: "Assinatura", icon: CreditCard}, // NOVO LINK
+    {href: "/dashboard/billing", label: "Assinatura", icon: CreditCard},
   ];
 
   const sidebarContent = (
@@ -159,29 +165,19 @@ export function Sidebar() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-56" align="start">
-              <DropdownMenuLabel>Trocar de Loja</DropdownMenuLabel>
-              <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                {isLoadingTenants ? (
-                  <DropdownMenuItem disabled>Carregando...</DropdownMenuItem>
-                ) : userTenants.length > 0 ? (
-                  userTenants.map(tenant => (
-                    <DropdownMenuItem
-                      key={tenant.id}
-                      onClick={() => handleSelectTenant(tenant)}
-                      disabled={activeTenantId === tenant.id}
-                    >
-                      {tenant.name}
-                      {activeTenantId === tenant.id && (
-                        <CheckCircle className="ml-auto h-4 w-4 text-green-500" />
-                      )}
-                    </DropdownMenuItem>
-                  ))
-                ) : (
-                  <DropdownMenuItem disabled>
-                    Nenhuma loja encontrada.
+                {userTenants.map(tenant => (
+                  <DropdownMenuItem
+                    key={tenant.id}
+                    onClick={() => handleSelectTenant(tenant)}
+                    disabled={activeTenantId === tenant.id}
+                  >
+                    {tenant.name}
+                    {activeTenantId === tenant.id && (
+                      <CheckCircle className="ml-auto h-4 w-4 text-green-500" />
+                    )}
                   </DropdownMenuItem>
-                )}
+                ))}
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
               {canInviteUsers && (
@@ -189,7 +185,7 @@ export function Sidebar() {
                   <UserPlus className="mr-2 h-4 w-4" /> Convidar Usuário
                 </DropdownMenuItem>
               )}
-              {!isOwnerOfAnyTenant && (
+              {!isOwnerOfAnyTenant && !isLoadingTenants && (
                 <DropdownMenuItem
                   onClick={() => setIsCreateTenantModalOpen(true)}
                 >
@@ -205,7 +201,7 @@ export function Sidebar() {
               href={item.href}
               onClick={() => setIsSheetOpen(false)}
               className={`flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary ${
-                pathname === item.href
+                pathname.startsWith(item.href)
                   ? "bg-muted text-primary"
                   : "text-muted-foreground"
               }`}
@@ -254,21 +250,20 @@ export function Sidebar() {
         open={isCreateTenantModalOpen}
         onOpenChange={setIsCreateTenantModalOpen}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent>
           <DialogHeader>
-            <DialogTitle>Criar Sua Loja</DialogTitle>
-            <DialogDescription>Dê um nome para o seu espaço.</DialogDescription>
+            <DialogTitle>Criar Loja</DialogTitle>
           </DialogHeader>
           <CreateTenantForm onTenantCreated={handleTenantCreated} />
         </DialogContent>
       </Dialog>
+      {/* CORREÇÃO DO BUG: O onOpenChange agora controla o estado, garantindo que o modal feche corretamente */}
       <Dialog open={isInviteModalOpen} onOpenChange={setIsInviteModalOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent>
           <DialogHeader>
-            <DialogTitle>Convidar Novo Usuário</DialogTitle>
+            <DialogTitle>Convidar Usuário</DialogTitle>
             <DialogDescription>
-              Envie um convite para alguém se juntar à sua loja "
-              {activeTenantName}".
+              Adicione um novo membro para a loja "{activeTenantName}".
             </DialogDescription>
           </DialogHeader>
           <InviteUserForm
@@ -285,7 +280,6 @@ export function Sidebar() {
           <SheetTrigger asChild>
             <Button variant="ghost" size="icon">
               <PanelLeft className="h-5 w-5" />
-              <span className="sr-only">Abrir menu</span>
             </Button>
           </SheetTrigger>
           <SheetContent side="left" className="w-72 p-0 flex flex-col">
