@@ -1,46 +1,34 @@
-import mongoose, {Schema, model, models, Document} from "mongoose";
+import mongoose, {Schema, Document, Model} from "mongoose";
 
 export interface IUser extends Document {
+  name: string;
   email: string;
-  passwordHash: string;
-  name?: string;
-  createdAt?: Date;
-  updatedAt?: Date;
+  password?: string;
+  image?: string;
+  cnpj?: string;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
-const userSchema = new Schema<IUser>(
+const UserSchema: Schema<IUser> = new Schema(
   {
+    name: {type: String, required: true},
     email: {
       type: String,
-      required: [true, "E-mail é obrigatório."],
-      unique: true, // Garante que cada e-mail seja único
-      trim: true, // Remove espaços extras
-      lowercase: true, // Armazena em minúsculas para consistência
-      match: [
-        /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
-        "Por favor, use um e-mail válido.",
-      ], // Validação de formato
-      index: true, // Indexado para buscas rápidas e unicidade
-    },
-    passwordHash: {
-      type: String,
-      required: [true, "Senha é obrigatória."],
-      // A senha NUNCA será armazenada aqui diretamente.
-      // lógica de autenticação com bcrypt gerará o hash ANTES de salvar.
-    },
-    name: {
-      type: String,
+      required: true,
+      unique: true,
       trim: true,
+      lowercase: true,
     },
+    password: {type: String, select: false}, // select: false para não retornar a senha em queries normais
+    image: {type: String},
+    cnpj: {type: String, trim: true}, // Campo opcional ou obrigatório conforme sua regra de negócio
   },
-  {timestamps: true}
-); // Adiciona createdAt e updatedAt
+  {timestamps: true},
+);
 
-// Remove o passwordHash ao converter para JSON (segurança)
-userSchema.methods.toJSON = function () {
-  const user = this.toObject();
-  delete user.passwordHash;
-  return user;
-};
+// Evita re-compilação do model em desenvolvimento (Hot Reload do Next.js)
+const User: Model<IUser> =
+  mongoose.models.User || mongoose.model<IUser>("User", UserSchema);
 
-export const User = mongoose.models.User || model<IUser>("User", userSchema);
+export default User;

@@ -22,7 +22,7 @@ import {
   DialogTitle,
   // Removido DialogTrigger daqui, pois não será usado nos itens de menu
 } from "@/components/ui/dialog";
-import {AddInventoryItemForm} from "./AddInventoryItemForm";
+import AddInventoryItemForm from "./AddInventoryItemForm";
 import {ExcelUpload} from "./ExcelUpload";
 
 interface TopMenuProps {

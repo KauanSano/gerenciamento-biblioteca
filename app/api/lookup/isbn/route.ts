@@ -1,136 +1,67 @@
-// app/api/lookup/isbn/route.ts
-
 import {NextResponse} from "next/server";
-import dbConnect from "@/lib/db/dbConnect"; // << AJUSTE O CAMINHO!
-import {BookMetadata} from "@/lib/models/bookMetadata.model"; // << AJUSTE O CAMINHO!
-import {getBookMetadataFromGoogle} from "@/lib/services/googleBooksAPI"; // << AJUSTE O CAMINHO!
 
-/**
- * GET Handler para buscar metadados de livro por ISBN, orquestrando
- * busca interna e externa (Google Books API).
- * Salva no banco interno se encontrado externamente.
- * Exemplo de chamada: /api/lookup/isbn?isbn=978XXXXXXXXXX
- */
-export async function GET(request: Request) {
-  const {searchParams} = new URL(request.url);
+export async function GET(req: Request) {
+  const {searchParams} = new URL(req.url);
   const isbn = searchParams.get("isbn");
 
-  if (!isbn || isbn.trim() === "") {
-    return NextResponse.json(
-      {message: "Parâmetro ISBN é obrigatório."},
-      {status: 400}
-    );
+  if (!isbn) {
+    return NextResponse.json({error: "ISBN é obrigatório"}, {status: 400});
   }
 
-  const cleanIsbn = isbn.trim();
+  // Remove caracteres não numéricos (exceto X para ISBN-10)
+  const cleanIsbn = isbn.replace(/[^0-9X]/gi, "");
 
   try {
-    await dbConnect();
+    // Consulta API do Google Books
+    const googleBooksUrl = `https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`;
+    const res = await fetch(googleBooksUrl);
 
-    // 1. Busca no banco de dados interno primeiro
-    console.log(`Buscando ISBN ${cleanIsbn} internamente...`);
-    const internalResult = await BookMetadata.findOne({isbn: cleanIsbn}).lean();
-
-    if (internalResult) {
-      console.log(`ISBN ${cleanIsbn} encontrado internamente.`);
-      // Retorna dados internos, indicando a origem
+    if (!res.ok) {
+      console.error("Erro Google Books API:", res.status, res.statusText);
       return NextResponse.json(
-        {
-          data: internalResult,
-          source: "internal", // Indica que veio do DB interno
-        },
-        {status: 200}
+        {error: "Erro ao consultar serviço de livros"},
+        {status: res.status},
       );
     }
 
-    // 2. Se não encontrou internamente, busca na API externa
-    console.log(
-      `ISBN ${cleanIsbn} não encontrado internamente. Buscando externamente...`
+    const data = await res.json();
+
+    // Verifica se encontrou algum livro
+    if (!data.items || data.items.length === 0) {
+      return NextResponse.json(null, {status: 404});
+    }
+
+    // Pega o primeiro resultado
+    const volumeInfo = data.items[0].volumeInfo;
+
+    // Tenta encontrar o ISBN-13 específico nos identificadores, se disponível
+    const isbn13Obj = volumeInfo.industryIdentifiers?.find(
+      (id: any) => id.type === "ISBN_13",
     );
-    const externalResult = await getBookMetadataFromGoogle(cleanIsbn);
+    const foundIsbn13 = isbn13Obj ? isbn13Obj.identifier : undefined;
 
-    if (!externalResult) {
-      console.log(`ISBN ${cleanIsbn} não encontrado externamente.`);
-      // Retorna 404 se não encontrado em nenhuma fonte
-      return NextResponse.json(
-        {
-          message: "Livro não encontrado na base interna ou externa.",
-          source: "none", // Indica que não foi encontrado
-        },
-        {status: 404}
-      );
-    }
+    // Mapeamento PLANO para o Frontend
+    // Isso garante que data.title não seja undefined no componente
+    const bookData = {
+      title: volumeInfo.title || "Título Desconhecido",
+      authors: volumeInfo.authors || [],
+      isbn: cleanIsbn,
+      isbn13: foundIsbn13,
+      publisher: volumeInfo.publisher,
+      publishedDate: volumeInfo.publishedDate,
+      description: volumeInfo.description,
+      pageCount: volumeInfo.pageCount,
+      categories: volumeInfo.categories,
+      imageLinks: volumeInfo.imageLinks,
+      language: volumeInfo.language || "pt-BR",
+    };
 
-    // 3. Se encontrou externamente, SALVA no banco interno
-    console.log(
-      `ISBN ${cleanIsbn} encontrado externamente. Salvando internamente...`
-    );
-    try {
-      // Cria uma nova instância do modelo com os dados externos
-      // O Mongoose vai validar os dados contra o BookMetadataSchema
-      const newBookMeta = new BookMetadata(externalResult);
-      // Salva no banco de dados
-      await newBookMeta.save();
-      console.log(`ISBN ${cleanIsbn} salvo com sucesso no banco interno.`);
-
-      // Retorna os dados RECÉM-SALVOS (que agora incluem _id, etc.), indicando a origem
-      return NextResponse.json(
-        {
-          data: newBookMeta.toObject(), // Converte para objeto JS simples
-          source: "external", // Indica que veio da API externa e foi salvo
-        },
-        {status: 200}
-      );
-    } catch (saveError: any) {
-      // Trata erros especificamente durante o save
-      console.error(
-        `Erro ao salvar ISBN ${cleanIsbn} vindo da API externa:`,
-        saveError
-      );
-      // Verifica se o erro é de chave duplicada (pode acontecer em condição de corrida)
-      if (saveError.code === 11000) {
-        // Outra requisição pode ter salvado o mesmo ISBN enquanto esta estava processando.
-        // Tenta buscar novamente no banco interno para retornar o dado já existente.
-        console.log(
-          `ISBN ${cleanIsbn} provavelmente já foi salvo por outra requisição. Buscando novamente...`
-        );
-        const existingBook = await BookMetadata.findOne({
-          isbn: cleanIsbn,
-        }).lean();
-        if (existingBook) {
-          return NextResponse.json(
-            {data: existingBook, source: "internal"},
-            {status: 200}
-          );
-        } else {
-          // Se mesmo assim não encontrar, retorna erro genérico
-          return NextResponse.json(
-            {
-              message:
-                "Erro ao salvar dados externos e não encontrado após conflito.",
-              source: "error",
-            },
-            {status: 500}
-          );
-        }
-      }
-      // Outros erros de save (ex: falha de validação do Mongoose)
-      return NextResponse.json(
-        {
-          message: `Erro ao salvar dados da API externa: ${saveError.message}`,
-          source: "error",
-        },
-        {status: 500}
-      );
-    }
-  } catch (error: any) {
-    console.error(`Erro geral na API de lookup para ISBN ${cleanIsbn}:`, error);
+    return NextResponse.json(bookData);
+  } catch (error) {
+    console.error("Erro interno na rota ISBN:", error);
     return NextResponse.json(
-      {
-        message: "Erro interno do servidor durante a busca do livro.",
-        source: "error",
-      },
-      {status: 500}
+      {error: "Erro interno do servidor"},
+      {status: 500},
     );
   }
 }

@@ -1,64 +1,57 @@
-// app/api/register/route.ts
-
 import {NextResponse} from "next/server";
 import bcrypt from "bcrypt";
-import dbConnect from "@/lib/db/dbConnect"; // << AJUSTE O CAMINHO
-import {User} from "@/lib/models/user.model"; // << AJUSTE O CAMINHO
+import dbConnect from "@/lib/db/dbConnect";
+import User from "@/lib/models/user.model";
+import Profile from "@/lib/models/profile.model";
 
-export async function POST(request: Request) {
+export async function POST(req: Request) {
   try {
-    const {email, password, name} = await request.json();
+    const {name, email, password, cnpj} = await req.json();
 
-    // Validação básica
-    if (!email || !password) {
+    if (!name || !email || !password) {
       return NextResponse.json(
-        {message: "Email e senha são obrigatórios."},
-        {status: 400}
+        {error: "Nome, email e senha são obrigatórios."},
+        {status: 400},
       );
     }
-    // Adicionar validação de força da senha aqui se desejar
 
     await dbConnect();
 
     // Verifica se usuário já existe
-    const existingUser = await User.findOne({
-      email: email.toLowerCase(),
-    }).lean();
+    const existingUser = await User.findOne({email});
     if (existingUser) {
       return NextResponse.json(
-        {message: "Este e-mail já está em uso."},
-        {status: 409}
-      ); // 409 Conflict
-    }
-
-    // Cria o hash da senha
-    const saltRounds = 10; // Fator de custo para o hash
-    const passwordHash = await bcrypt.hash(password, saltRounds);
-
-    // Cria o novo usuário
-    const newUser = new User({
-      email: email.toLowerCase(),
-      passwordHash: passwordHash,
-      name: name,
-    });
-    await newUser.save();
-
-    return NextResponse.json(
-      {message: "Usuário registrado com sucesso!"},
-      {status: 201}
-    ); // 201 Created
-  } catch (error: any) {
-    console.error("Erro no registro:", error);
-    // Trata erros de validação do Mongoose que podem ocorrer
-    if (error.name === "ValidationError") {
-      return NextResponse.json(
-        {message: "Erro de validação.", errors: error.errors},
-        {status: 400}
+        {error: "Este email já está cadastrado."},
+        {status: 400},
       );
     }
+
+    // Cria o Usuário (Conta Principal)
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const newUser = await User.create({
+      name,
+      email,
+      password: hashedPassword,
+      cnpj,
+    });
+
+    // CRIAÇÃO AUTOMÁTICA DO PRIMEIRO PERFIL (ADMIN)
+    await Profile.create({
+      user: newUser._id,
+      name: name.split(" ")[0], // Pega o primeiro nome
+      role: "admin",
+      avatar: "admin-avatar",
+    });
+
     return NextResponse.json(
-      {message: "Erro interno do servidor ao registrar usuário."},
-      {status: 500}
+      {message: "Usuário criado com sucesso", userId: newUser._id},
+      {status: 201},
+    );
+  } catch (error) {
+    console.error("Erro no registro:", error);
+    return NextResponse.json(
+      {error: "Erro interno ao criar conta."},
+      {status: 500},
     );
   }
 }

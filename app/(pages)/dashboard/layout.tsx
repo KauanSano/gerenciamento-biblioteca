@@ -1,7 +1,6 @@
 // app/dashboard/layout.tsx
 import React from "react";
 import {TopMenu} from "../../components/TopMenu";
-import {TenantSelectorGate} from "../../components/TenantSelectorGate"; // Importa o Gate
 
 import {Sidebar} from "@/app/components/Sidebar";
 
@@ -17,10 +16,8 @@ export default function DashboardLayout({
         <TopMenu />{" "}
         <main className="flex-1 overflow-y-auto">
           {/* Envolve o conteúdo com o Gate */}
-          <TenantSelectorGate>
-            {/* Só renderiza o conteúdo da página se houver tenant ativo */}
-            <div className="p-4 md:p-6 lg:p-8">{children}</div>
-          </TenantSelectorGate>
+          {/* Só renderiza o conteúdo da página se houver tenant ativo */}
+          <div className="p-4 md:p-6 lg:p-8">{children}</div>
         </main>
       </div>
     </div>
