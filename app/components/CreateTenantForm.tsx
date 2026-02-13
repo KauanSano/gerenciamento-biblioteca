@@ -83,7 +83,7 @@ export function CreateTenantForm({onTenantCreated}: CreateTenantFormProps) {
           value={name}
           onChange={e => setName(e.target.value)}
           required
-          placeholder="Ex: Sebo do Zé"
+          placeholder="Ex: Livraria Brasil..."
         />
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
